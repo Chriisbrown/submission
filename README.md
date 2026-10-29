@@ -61,6 +61,7 @@ source scripts/checkMultiple.sh "170pre5" resubmit                 # crab resubm
 CRAB_OPTS="--maxmemory=6000" source scripts/checkMultiple.sh "170pre5" resubmit # set additional crab option
 source scripts/checkMultiple.sh "170pre5" kill "4mu"               # crab kill still-running tasks (asks first)
 source scripts/checkMultiple.sh "170pre5" clear "4mu"              # move aside crab_ dirs of SUBMITREFUSED tasks so they can be submitted fresh (asks first)
+source scripts/checkMultiple.sh "170pre7" unstick                  # crab kill + move aside crab_ dirs of STUCK / SPLIT FAILED tasks so they can be submitted fresh (asks first)
 source scripts/summariseCrabLog.sh logs/check_170pre5_*.log        # re-summarise existing logs without calling crab
 ```
 

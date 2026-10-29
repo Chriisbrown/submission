@@ -1,9 +1,11 @@
-# Usage: source scripts/checkMultiple.sh "<joblist>" [check|resubmit|kill|clear] [task filter regex]
+# Usage: source scripts/checkMultiple.sh "<joblist>" [check|resubmit|kill|clear|unstick] [task filter regex]
 #   joblist:  space-separated submissions to check (e.g "170pre3 170pre2" though can also just be a single one)
 #   check:    (default) crab status for every task, then a one-line-per-task summary
 #   resubmit: check, then crab resubmit only the tasks summarised as FAILED
 #   kill:     check, then crab kill only the still-active (RUNNING/PROBING) tasks, after you confirm
 #   clear:    check, then move aside the crab_ dirs of SUBMITREFUSED tasks, after you confirm, so they can be submitted fresh
+#   unstick:  check, then crab kill + move aside the crab_ dirs of STUCK / SPLIT FAILED tasks, after you confirm,
+#             so they can be submitted fresh
 #   filter:   optional regex on the task directory name, e.g "4mu" or "200PU$" (applies to all actions)
 # Extra crab options for resubmit/kill can be passed via CRAB_OPTS, e.g
 #   CRAB_OPTS="--maxmemory=6000" source scripts/checkMultiple.sh "170pre5" resubmit
@@ -22,8 +24,8 @@ if [[ -z $joblist ]]; then
     return
 fi
 case $ACTION in
-    check|resubmit|kill|clear) ;;
-    *) echo "Error: unknown action '$ACTION' - use check, resubmit, kill or clear"; return 1 ;;
+    check|resubmit|kill|clear|unstick) ;;
+    *) echo "Error: unknown action '$ACTION' - use check, resubmit, kill, clear or unstick"; return 1 ;;
 esac
 
 echo "joblist: $joblist, action: $ACTION, filter: $FILTER"
@@ -53,10 +55,28 @@ for job in $joblist; do
         resubmit) targets=$(source scripts/summariseCrabLog.sh --names FAILED $log) ;;
         kill)     targets=$(source scripts/summariseCrabLog.sh --names "RUNNING|PROBING" $log) ;;
         clear)    targets=$(source scripts/summariseCrabLog.sh --names "SUBMITREFUSED|SUBMITFAILED" $log) ;;
+        unstick)  targets=$(source scripts/summariseCrabLog.sh --names "STUCK|SPLIT FAILED" $log) ;;
         *)        continue ;;
     esac
     if [[ -z $targets ]]; then
         echo "Nothing to $ACTION for $job"
+        continue
+    fi
+    if [[ $ACTION == unstick ]]; then
+        # STUCK / SPLIT FAILED tasks will never progress: kill them (harmless if the scheduler already gave up),
+        # then move the crab_ project dir aside (keeping its crab.log) so the task can be submitted fresh
+        echo "Will crab kill, then move aside the crab_ project dirs of (so they can be submitted fresh):"
+        printf '  %s\n' $targets
+        _confirm "Unstick these?" || { echo "Not unsticking anything for $job"; continue; }
+        for t in $targets; do
+            crabdir=ntuples/$sub/$t/crab_$t
+            stamp=$(grep -om1 '[0-9]\{6\}_[0-9]\{6\}:' $crabdir/crab.log 2>/dev/null); stamp=${stamp%:}
+            echo "crab kill: $t" |& tee -a logs/unstick_${job}_${revision}.log
+            crab kill $CRAB_OPTS -d $crabdir |& tee -a logs/unstick_${job}_${revision}.log
+            mv -v $crabdir ntuples/$sub/$t/old_crab_${t}_${revision} |& tee -a logs/unstick_${job}_${revision}.log
+            [[ -n $stamp ]] && echo "  old task timestamp: $stamp - if a .../$stamp/ output folder exists on EOS, move it aside before hadding" |& tee -a logs/unstick_${job}_${revision}.log
+        done
+        echo "Now resubmit these with submit.py --create --submit"
         continue
     fi
     if [[ $ACTION == clear ]]; then

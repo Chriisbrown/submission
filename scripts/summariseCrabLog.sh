@@ -13,7 +13,9 @@ for _crablog in "$@"; do
         n++; names[n] = name
         if (length(name) > w) w = length(name)
         line[n] = describe()
+        extra[n] = (cat[n] == "SPLIT FAILED" && probelog != "") ? "probe stage log: " probelog : ""
         name = ""; server = ""; sched = ""; msg = ""; codes = ""; tape = 0; nodir = 0; age = ""; purged = 0
+        boot = ""; nostatus = 0; probelog = ""
         delete jobs; delete probe; njobtot = 0; nprobetot = 0
     }
     function counts(arr, tot,   s, out) {
@@ -30,7 +32,15 @@ for _crablog in "$@"; do
             cat[n] = server
             return (tape ? "input on TAPE only - recall to disk, then submit fresh (resubmit will not work)" : msg)
         }
-        if (njobtot == 0) { cat[n] = "PROBING"; return (nprobetot ? "probe jobs: " counts(probe) : "waiting to start, scheduler " sched) }
+        # automatic splitting: probes ran but the scheduler failed before any processing jobs were made - will never progress
+        if (njobtot == 0 && sched == "FAILED") {
+            cat[n] = "SPLIT FAILED"
+            return "probe jobs: " (nprobetot ? counts(probe) : "none") ", but no processing jobs were created (scheduler FAILED) - check the probe stage log, then unstick"
+        }
+        # on the scheduler but it reports nothing: normal for a few minutes after submission, stuck after much longer
+        if (nostatus && boot + 0 > 120) { cat[n] = "STUCK"; return "on the scheduler for " boot " min with no status info - unstick (or report it if it keeps happening)" }
+        if (nostatus) { cat[n] = "PROBING"; return "just reached the scheduler, no status info yet" }
+        if (njobtot == 0) { cat[n] = "PROBING"; return (nprobetot ? "probe jobs: " counts(probe) : (sched != "" ? "waiting to start, scheduler " sched : "waiting to start, no scheduler status yet")) }
         done = jobs["finished"] + 0; failed = jobs["failed"] + jobs["killed"]
         active = njobtot - done - failed
         s = done "/" njobtot " finished"
@@ -66,13 +76,19 @@ for _crablog in "$@"; do
     /TAPE/                           { tape = 1 }
     /^Task was submitted [0-9]+ days ago/ { age = $4 }
     /^Files are purged from Grid scheduler/ { purged = 1 }
+    /^Task bootstrapped on schedd more than [0-9]+ minutes ago/ { boot = $(NF-2) }
+    /no status info is available yet/ { nostatus = 1 }
+    /^Probe stage log:/              { probelog = $NF }
     /^(Warning|Error|ERROR)/ && msg == "" { msg = $0; sub(/^[A-Za-z]+:[ \t]*/, "", msg); msg = substr(msg, 1, 100) }
     END {
         flush()
         if (want != "") { for (i = 1; i <= n; i++) if (cat[i] ~ ("^(" want ")$")) print names[i]; exit }
-        split("NO CRAB DIR,UNKNOWN,SUBMITREFUSED,SUBMITFAILED,KILLED,FAILED,PROBING,RUNNING,DONE,PURGED", order, ",")
+        split("NO CRAB DIR,UNKNOWN,SUBMITREFUSED,SUBMITFAILED,KILLED,FAILED,SPLIT FAILED,STUCK,PROBING,RUNNING,DONE,PURGED", order, ",")
         for (o = 1; o in order; o++) {
-            for (i = 1; i <= n; i++) if (cat[i] == order[o]) { printf "  %-13s %-" w "s  %s\n", cat[i], names[i], line[i]; tally[cat[i]]++; seen[i] = 1 }
+            for (i = 1; i <= n; i++) if (cat[i] == order[o]) {
+                printf "  %-13s %-" w "s  %s\n", cat[i], names[i], line[i]; tally[cat[i]]++; seen[i] = 1
+                if (extra[i] != "") printf "  %-13s %-" w "s  %s\n", "", "", extra[i]
+            }
         }
         for (i = 1; i <= n; i++) if (!seen[i]) { printf "  %-13s %-" w "s  %s\n", cat[i], names[i], line[i]; tally[cat[i]]++ }
         t = ""; for (o = 1; o in order; o++) if (order[o] in tally) t = t ", " tally[order[o]] " " order[o]
