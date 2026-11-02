@@ -3,23 +3,23 @@ Common:
   name: ntuples
 
   tasks:
-    - TT_Spring24_200PU
+    # - TT_Spring24_200PU
     - DY_M50_Spring24_200PU
-    - VBFHtoTaus_Spring24_200PU
-    - Hto2gg_Spring24_200PU
-    # - DY_M10_Spring24_200PU
-    - MinBias_Spring24_200PUALCA
-    - TT_Spring24_140PU
+    # - VBFHtoTaus_Spring24_200PU
+    # - Hto2gg_Spring24_200PU
+    # # - DY_M10_Spring24_200PU
+    # - MinBias_Spring24_200PUALCA
+    # - TT_Spring24_140PU
     - DY_M50_Spring24_140PU
-    - VBFHtoTaus_Spring24_140PU
-    - Hto2gg_Spring24_140PU
-    # - DY_M10_Spring24_140PU
-    - MinBias_Spring24_140PU
-    - VBFHtoBB_Spring24_200PU
-    - VBFHtoCC_Spring24_200PU
-    - VBFHtoInv_Spring24_200PU
-    - GluGluToHHTo2B2Tau_Spring24_200PU
-    - GluGluToHHTo4B_Spring24_200PU
+    # - VBFHtoTaus_Spring24_140PU
+    # - Hto2gg_Spring24_140PU
+    # # - DY_M10_Spring24_140PU
+    # - MinBias_Spring24_140PU
+    # - VBFHtoBB_Spring24_200PU
+    # - VBFHtoCC_Spring24_200PU
+    # - VBFHtoInv_Spring24_200PU
+    # - GluGluToHHTo2B2Tau_Spring24_200PU
+    # - GluGluToHHTo4B_Spring24_200PU
     # # - WTo3Pi_Spring24_200PU
     # ### Long lived samples
     # - DisplacedMuons_Pt-2To10_Spring24_200PU

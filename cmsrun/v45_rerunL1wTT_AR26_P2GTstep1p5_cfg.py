@@ -113,12 +113,14 @@ process.Phase2L1GTAlgoBlockProducer = cms.Path(process.l1tGTAlgoBlockProducerSeq
 process.pDoubleEGEle = cms.Path(process.DoubleEGEle)
 process.pDoubleIsoTau = cms.Path(process.DoubleIsoTau)
 process.pDoubleTkEle = cms.Path(process.DoubleTkEle)
+process.pDoubleTkEleIso_er1p5 = cms.Path(process.DoubleTkEleIsoer1p5)
 process.pDoubleTkEle_er1p2_dR_Max0p6 = cms.Path(process.DoubleTkEleer1p2dRMax0p6)
 process.pDoubleTkEle_er1p5_dEta_Max1p5 = cms.Path(process.DoubleTkEleer1p5dEtaMax1p5)
 process.pDoubleTkMu = cms.Path(process.DoubleTkMu)
 process.pDoubleTkMu0er1p4_SQ_OS_dR_Max1p4 = cms.Path(process.DoubleTkMu0er1p4SQOSdRMax1p4)
 process.pDoubleTkMu4er2p0_SQ_OS_dR_Max1p6 = cms.Path(process.DoubleTkMu4er2p0SQOSdRMax1p6)
 process.pDoubleTkPhoIso = cms.Path(process.DoubleTkPhoIso)
+process.pDoubleTkPhoIso_er1p5 = cms.Path(process.DoubleTkPhoIsoer1p5)
 process.pSingleEGEle = cms.Path(process.SingleEGEle)
 process.pSingleTkEle = cms.Path(process.SingleTkEle)
 process.pSingleTkEleIso = cms.Path(process.SingleTkEleIso)
@@ -164,7 +166,7 @@ process.endjob_step = cms.EndPath(process.endOfProcess)
 process.NANOAODoutput_step = cms.EndPath(process.NANOAODoutput)
 
 # Schedule definition
-process.schedule = cms.Schedule(process.L1TrackTrigger_step,process.L1simulation_step,process.Phase2L1GTProducer,process.Phase2L1GTAlgoBlockProducer,process.pDoubleDispMu,process.pDoubleEGEle,process.pDoubleIsoTau,process.pDoubleIsoTau_Jet,process.pDoubleJet,process.pDoubleJet_IsoTau,process.pDoubleJet_METSum,process.pDoubleJet_Mass_Min1000,process.pDoubleJet_Mass_Min250_dEta_Max1p5,process.pDoubleJet_TkEleIso,process.pDoubleJet_TkMu,process.pDoubleJet_dEta_Max1p6,process.pDoubleTkEle,process.pDoubleTkEle_HTSum,process.pDoubleTkEle_er1p2_dR_Max0p6,process.pDoubleTkEle_er1p5_dEta_Max1p5,process.pDoubleTkMu,process.pDoubleTkMu0er1p4_SQ_OS_dR_Max1p4,process.pDoubleTkMu4er2p0_SQ_OS_dR_Max1p6,process.pDoubleTkMu_DoubleTkEle,process.pDoubleTkMu_HTSum,process.pDoubleTkMu_Jet_Mu1,process.pDoubleTkMu_Jet_Mu2,process.pDoubleTkMu_METSum_HTSum,process.pDoubleTkMu_TkEle,process.pDoubleTkPhoIso,process.pHTSum,process.pMETSum,process.pSingleDispMu_BMTF,process.pSingleEGEle,process.pSingleJet,process.pSingleTkEle,process.pSingleTkEleIso,process.pSingleTkIsoPhoton,process.pSingleTkMu,process.pSingleTkMu_Barrel,process.pTkEleIso_HTSum,process.pTkEleIso_IsoTau,process.pTkMu12_HTSum150,process.pTkMu20_TkEle10,process.pTkMu6_HTSum240,process.pTkMu7_TkEle20,process.pTkMu_DoubleTkEle,process.pTkMu_IsoTau,process.pTkMu_Jet_METSum,process.pTripleTkMu,process.pTripleTkMu_4_2p5_0_OS12_Mass_Max12,process.pTripleTkMu_4_2p5_0_OS13_Mass_Max12,process.pTripleTkMu_4_2p5_0_OS23_Mass_Max12,process.nanoAOD_step,process.endjob_step,process.NANOAODoutput_step)
+process.schedule = cms.Schedule(process.L1TrackTrigger_step,process.L1simulation_step,process.Phase2L1GTProducer,process.Phase2L1GTAlgoBlockProducer,process.pDoubleDispMu,process.pDoubleEGEle,process.pDoubleIsoTau,process.pDoubleIsoTau_Jet,process.pDoubleJet,process.pDoubleJet_IsoTau,process.pDoubleJet_METSum,process.pDoubleJet_Mass_Min1000,process.pDoubleJet_Mass_Min250_dEta_Max1p5,process.pDoubleJet_TkEleIso,process.pDoubleJet_TkMu,process.pDoubleJet_dEta_Max1p6,process.pDoubleTkEle,process.pDoubleTkEleIso_er1p5,process.pDoubleTkEle_HTSum,process.pDoubleTkEle_er1p2_dR_Max0p6,process.pDoubleTkEle_er1p5_dEta_Max1p5,process.pDoubleTkMu,process.pDoubleTkMu0er1p4_SQ_OS_dR_Max1p4,process.pDoubleTkMu4er2p0_SQ_OS_dR_Max1p6,process.pDoubleTkMu_DoubleTkEle,process.pDoubleTkMu_HTSum,process.pDoubleTkMu_Jet_Mu1,process.pDoubleTkMu_Jet_Mu2,process.pDoubleTkMu_METSum_HTSum,process.pDoubleTkMu_TkEle,process.pDoubleTkPhoIso,process.pDoubleTkPhoIso_er1p5,process.pHTSum,process.pMETSum,process.pSingleDispMu_BMTF,process.pSingleEGEle,process.pSingleJet,process.pSingleTkEle,process.pSingleTkEleIso,process.pSingleTkIsoPhoton,process.pSingleTkMu,process.pSingleTkMu_Barrel,process.pTkEleIso_HTSum,process.pTkEleIso_IsoTau,process.pTkMu12_HTSum150,process.pTkMu20_TkEle10,process.pTkMu6_HTSum240,process.pTkMu7_TkEle20,process.pTkMu_DoubleTkEle,process.pTkMu_IsoTau,process.pTkMu_Jet_METSum,process.pTripleTkMu,process.pTripleTkMu_4_2p5_0_OS12_Mass_Max12,process.pTripleTkMu_4_2p5_0_OS13_Mass_Max12,process.pTripleTkMu_4_2p5_0_OS23_Mass_Max12,process.nanoAOD_step,process.endjob_step,process.NANOAODoutput_step)
 from PhysicsTools.PatAlgos.tools.helpers import associatePatAlgosToolsTask
 associatePatAlgosToolsTask(process)
 
