@@ -59,10 +59,14 @@ source scripts/checkMultiple.sh "170pre5" check "4mu"              # only tasks 
 source scripts/checkMultiple.sh "170pre5" check "MFF-(25|50)_CTau-10000mm" # only tasks matching a regex (more complex example)
 source scripts/checkMultiple.sh "170pre5" resubmit                 # crab resubmit the FAILED tasks only
 CRAB_OPTS="--maxmemory=6000" source scripts/checkMultiple.sh "170pre5" resubmit # set additional crab option
-source scripts/checkMultiple.sh "170pre5" kill "4mu"               # crab kill still-running tasks (asks first)
+source scripts/checkMultiple.sh "170pre5" kill "4mu"               # crab kill unfinished tasks and move their crab_ dirs aside to resubmit fresh (asks first)
+source scripts/checkMultiple.sh "170pre5" move                    # move aside the crab_ dirs of already KILLED tasks to resubmit fresh (asks first)
 source scripts/checkMultiple.sh "170pre5" clear "4mu"              # move aside crab_ dirs of SUBMITREFUSED tasks so they can be submitted fresh (asks first)
 source scripts/checkMultiple.sh "170pre7" unstick                  # crab kill + move aside crab_ dirs of STUCK / SPLIT FAILED tasks so they can be submitted fresh (asks first)
 source scripts/summariseCrabLog.sh logs/check_170pre5_*.log        # re-summarise existing logs without calling crab
+source scripts/diagnoseProbes.sh V45_reL1wTT_170pre5 logs/check_170pre5_<date>.log # why the probes of SPLIT FAILED tasks failed
 ```
 
 Tasks older than 40 days are not queried, as CRAB has purged their job details by then.
+
+For SPLIT FAILED tasks (automatic splitting, where the probe jobs failed) `checkMultiple.sh` also downloads the probe logs to `logs/probes_<job>_<date>/` with your grid proxy, and prints the probe exit codes, the first cmsRun fatal exception and the `crab getlog` command to look further.

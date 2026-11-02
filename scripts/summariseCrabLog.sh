@@ -2,18 +2,22 @@
 # One line per CRAB task from a checkSubmission.sh log, grouped so the tasks needing attention come first.
 # Works on old logs too, so you can re-summarise without calling crab status again.
 # --names prints only the names of tasks in the given categories (e.g. FAILED), one per line, for use in other scripts
+# --probelogs prints "<task> <probe stage log URL>" for each SPLIT FAILED task, for scripts/diagnoseProbes.sh
 
 _want=""
+_probelogs=0
 if [[ $1 == "--names" ]]; then _want=$2; shift 2; fi
+if [[ $1 == "--probelogs" ]]; then _probelogs=1; shift; fi
 
 for _crablog in "$@"; do
-    awk -v want="$_want" '
+    awk -v want="$_want" -v probelogs="$_probelogs" '
     function flush() {
         if (name == "") return
         n++; names[n] = name
         if (length(name) > w) w = length(name)
         line[n] = describe()
         extra[n] = (cat[n] == "SPLIT FAILED" && probelog != "") ? "probe stage log: " probelog : ""
+        plog[n] = probelog
         name = ""; server = ""; sched = ""; msg = ""; codes = ""; tape = 0; nodir = 0; age = ""; purged = 0
         boot = ""; nostatus = 0; probelog = ""
         delete jobs; delete probe; njobtot = 0; nprobetot = 0
@@ -28,6 +32,7 @@ for _crablog in "$@"; do
         if (purged && server ~ /REFUSED|FAILED|KILLED/) { cat[n] = server;    return "last known status, task submitted " age " days ago" (tape ? " (input on TAPE)" : "") }
         if (purged)                                   { cat[n] = "PURGED";      return "submitted " age " days ago, job details purged from the scheduler after 40 days" }
         if (server == "")                             { cat[n] = "UNKNOWN";     return (msg != "" ? msg : "no status from crab (proxy expired?)") }
+        if (server == "KILLED" && njobtot == 0) { cat[n] = "KILLED"; return "task killed" (nprobetot ? ", probe jobs: " counts(probe) : "") " - move, then submit fresh" }
         if (server ~ /REFUSED|FAILED|KILLED/ && njobtot == 0) {
             cat[n] = server
             return (tape ? "input on TAPE only - recall to disk, then submit fresh (resubmit will not work)" : msg)
@@ -46,6 +51,7 @@ for _crablog in "$@"; do
         s = done "/" njobtot " finished"
         if (failed) s = s ", " failed " failed" (codes != "" ? " (exit" codes ")" : "")
         for (st in jobs) if (st != "finished" && st != "failed" && st != "killed") s = s ", " jobs[st] " " st
+        if (server == "KILLED") { cat[n] = "KILLED"; return s " - task killed, move, then submit fresh" }
         if (active > 0)  cat[n] = "RUNNING"
         else if (failed) { cat[n] = "FAILED"; s = s " - crab resubmit" }
         else             cat[n] = "DONE"
@@ -82,6 +88,7 @@ for _crablog in "$@"; do
     /^(Warning|Error|ERROR)/ && msg == "" { msg = $0; sub(/^[A-Za-z]+:[ \t]*/, "", msg); msg = substr(msg, 1, 100) }
     END {
         flush()
+        if (probelogs) { for (i = 1; i <= n; i++) if (cat[i] == "SPLIT FAILED" && plog[i] != "") print names[i], plog[i]; exit }
         if (want != "") { for (i = 1; i <= n; i++) if (cat[i] ~ ("^(" want ")$")) print names[i]; exit }
         split("NO CRAB DIR,UNKNOWN,SUBMITREFUSED,SUBMITFAILED,KILLED,FAILED,SPLIT FAILED,STUCK,PROBING,RUNNING,DONE,PURGED", order, ",")
         for (o = 1; o in order; o++) {

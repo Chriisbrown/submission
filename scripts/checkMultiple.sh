@@ -1,8 +1,11 @@
-# Usage: source scripts/checkMultiple.sh "<joblist>" [check|resubmit|kill|clear|unstick] [task filter regex]
+# Usage: source scripts/checkMultiple.sh "<joblist>" [check|resubmit|kill|move|clear|unstick] [task filter regex]
 #   joblist:  space-separated submissions to check (e.g "170pre3 170pre2" though can also just be a single one)
 #   check:    (default) crab status for every task, then a one-line-per-task summary
 #   resubmit: check, then crab resubmit only the tasks summarised as FAILED
-#   kill:     check, then crab kill only the still-active (RUNNING/PROBING) tasks, after you confirm
+#   kill:     check, then crab kill + move aside the crab_ dirs of the unfinished (RUNNING/PROBING/STUCK/SPLIT FAILED)
+#             tasks, after you confirm, so they can be submitted fresh
+#   move:     check, then move aside the crab_ dirs of already KILLED tasks, after you confirm, so they can be
+#             submitted fresh
 #   clear:    check, then move aside the crab_ dirs of SUBMITREFUSED tasks, after you confirm, so they can be submitted fresh
 #   unstick:  check, then crab kill + move aside the crab_ dirs of STUCK / SPLIT FAILED tasks, after you confirm,
 #             so they can be submitted fresh
@@ -24,8 +27,8 @@ if [[ -z $joblist ]]; then
     return
 fi
 case $ACTION in
-    check|resubmit|kill|clear|unstick) ;;
-    *) echo "Error: unknown action '$ACTION' - use check, resubmit, kill, clear or unstick"; return 1 ;;
+    check|resubmit|kill|move|clear|unstick) ;;
+    *) echo "Error: unknown action '$ACTION' - use check, resubmit, kill, move, clear or unstick"; return 1 ;;
 esac
 
 echo "joblist: $joblist, action: $ACTION, filter: $FILTER"
@@ -50,10 +53,13 @@ for job in $joblist; do
     source scripts/checkSubmission.sh $sub "$FILTER" > $log 2>&1
     echo "Summary for $job:"
     source scripts/summariseCrabLog.sh $log
+    # SPLIT FAILED tasks: fetch the probe logs and show why the probes failed
+    source scripts/diagnoseProbes.sh $sub $log logs/probes_${job}_${revision}
 
     case $ACTION in
         resubmit) targets=$(source scripts/summariseCrabLog.sh --names FAILED $log) ;;
-        kill)     targets=$(source scripts/summariseCrabLog.sh --names "RUNNING|PROBING" $log) ;;
+        kill)     targets=$(source scripts/summariseCrabLog.sh --names "RUNNING|PROBING|STUCK|SPLIT FAILED" $log) ;;
+        move)     targets=$(source scripts/summariseCrabLog.sh --names KILLED $log) ;;
         clear)    targets=$(source scripts/summariseCrabLog.sh --names "SUBMITREFUSED|SUBMITFAILED" $log) ;;
         unstick)  targets=$(source scripts/summariseCrabLog.sh --names "STUCK|SPLIT FAILED" $log) ;;
         *)        continue ;;
@@ -62,19 +68,25 @@ for job in $joblist; do
         echo "Nothing to $ACTION for $job"
         continue
     fi
-    if [[ $ACTION == unstick ]]; then
-        # STUCK / SPLIT FAILED tasks will never progress: kill them (harmless if the scheduler already gave up),
+    if [[ $ACTION == unstick || $ACTION == kill || $ACTION == move ]]; then
+        # kill the tasks (harmless if the scheduler already gave up; skipped for move, where they already are),
         # then move the crab_ project dir aside (keeping its crab.log) so the task can be submitted fresh
-        echo "Will crab kill, then move aside the crab_ project dirs of (so they can be submitted fresh):"
+        if [[ $ACTION == move ]]; then
+            echo "Will move aside the crab_ project dirs of (so they can be submitted fresh):"
+        else
+            echo "Will crab kill${CRAB_OPTS:+ $CRAB_OPTS}, then move aside the crab_ project dirs of (so they can be submitted fresh):"
+        fi
         printf '  %s\n' $targets
-        _confirm "Unstick these?" || { echo "Not unsticking anything for $job"; continue; }
+        _confirm "${ACTION^} these?" || { echo "Not doing $ACTION for anything in $job"; continue; }
         for t in $targets; do
             crabdir=ntuples/$sub/$t/crab_$t
             stamp=$(grep -om1 '[0-9]\{6\}_[0-9]\{6\}:' $crabdir/crab.log 2>/dev/null); stamp=${stamp%:}
-            echo "crab kill: $t" |& tee -a logs/unstick_${job}_${revision}.log
-            crab kill $CRAB_OPTS -d $crabdir |& tee -a logs/unstick_${job}_${revision}.log
-            mv -v $crabdir ntuples/$sub/$t/old_crab_${t}_${revision} |& tee -a logs/unstick_${job}_${revision}.log
-            [[ -n $stamp ]] && echo "  old task timestamp: $stamp - if a .../$stamp/ output folder exists on EOS, move it aside before hadding" |& tee -a logs/unstick_${job}_${revision}.log
+            if [[ $ACTION != move ]]; then
+                echo "crab kill: $t" |& tee -a logs/${ACTION}_${job}_${revision}.log
+                crab kill $CRAB_OPTS -d $crabdir |& tee -a logs/${ACTION}_${job}_${revision}.log
+            fi
+            mv -v $crabdir ntuples/$sub/$t/old_crab_${t}_${revision} |& tee -a logs/${ACTION}_${job}_${revision}.log
+            [[ -n $stamp ]] && echo "  old task timestamp: $stamp - if a .../$stamp/ output folder exists on EOS, move it aside before hadding" |& tee -a logs/${ACTION}_${job}_${revision}.log
         done
         echo "Now resubmit these with submit.py --create --submit"
         continue
@@ -93,9 +105,6 @@ for job in $joblist; do
     fi
     echo "Will crab $ACTION${CRAB_OPTS:+ $CRAB_OPTS}:"
     printf '  %s\n' $targets
-    if [[ $ACTION == kill ]]; then
-        _confirm "Kill these?" || { echo "Not killing anything for $job"; continue; }
-    fi
     for t in $targets; do
         echo "crab $ACTION: $t" |& tee -a logs/${ACTION}_${job}_${revision}.log
         crab $ACTION $CRAB_OPTS -d ntuples/$sub/$t/crab_$t |& tee -a logs/${ACTION}_${job}_${revision}.log
