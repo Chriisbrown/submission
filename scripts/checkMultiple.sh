@@ -23,7 +23,7 @@ FILTER=${3:-.}
 [[ $ACTION == FALSE ]] && ACTION=check
 
 if [[ -z $joblist ]]; then
-    echo 'Error: missing a joblist - run with e.g source scripts/checkMultiple.sh "<joblist>" [check|resubmit|kill|clear] [filter]'
+    echo 'Error: missing a joblist - run with e.g source scripts/checkMultiple.sh "<joblist>" [check|resubmit|kill|clear|unstick] [filter]'
     return
 fi
 case $ACTION in
@@ -32,6 +32,12 @@ case $ACTION in
 esac
 
 echo "joblist: $joblist, action: $ACTION, filter: $FILTER"
+
+# crab needs a CMSSW environment to run in (any release will do), so check cmsenv has been done first
+if [[ -z $CMSSW_BASE ]]; then
+    echo "Error: no CMSSW environment - run cmsenv inside a CMSSW release area first (any release works for crab)"
+    return 1
+fi
 
 # The crab calls run in the background, where they can't ask for your grid passphrase, so make sure a proxy is valid first
 if ! voms-proxy-info -exists -valid 1:00 &> /dev/null; then
