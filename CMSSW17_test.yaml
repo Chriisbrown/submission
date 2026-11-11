@@ -1,0 +1,19 @@
+Common:
+  mode: NTP
+  name: ntuples
+
+  tasks:
+     - TT_Spring24_200PU
+
+  cmssw_config: cmsrun/v45_rerunL1wTT_AR26_P2GTv0p0_cfg.py
+  version: V45_reL1wTT_170pre7_P2GTv0p0_Update4
+  output_dir_base: 
+  ncpu: 4
+  output_file_name: L1Nano.root
+
+TT_Spring24_200PU:
+  input_dataset: /TT_TuneCP5_14TeV-powheg-pythia8/Phase2Spring24DIGIRECOMiniAOD-PU200_Trk1GeV_140X_mcRun4_realistic_v4-v2/GEN-SIM-DIGI-RAW-MINIAOD
+  crab: False
+  splitting_mode: Automatic
+  splitting_granularity: 200
+  max_events: 1000
