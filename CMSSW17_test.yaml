@@ -17,3 +17,4 @@ TT_Spring24_200PU:
   splitting_mode: file_based
   splitting_granularity: 200
   max_events: 1000
+  job_flavor: longlunch
