@@ -14,6 +14,6 @@ Common:
 TT_Spring24_200PU:
   input_dataset: /TT_TuneCP5_14TeV-powheg-pythia8/Phase2Spring24DIGIRECOMiniAOD-PU200_Trk1GeV_140X_mcRun4_realistic_v4-v2/GEN-SIM-DIGI-RAW-MINIAOD
   crab: False
-  splitting_mode: Automatic
+  splitting_mode: file_based
   splitting_granularity: 200
   max_events: 1000
