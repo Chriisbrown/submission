@@ -650,7 +650,7 @@ def main():
             printStatus(clusterId)
             printWait(task_conf, clusterId)
             print('   out dir: {}'.format(task_conf.output_dir))
-	elif opt.MONITOR_YAML:
+    elif opt.MONITOR_YAML:
         writeMonitorPipeline(task_configs, opt.MONITOR_YAML)
     elif opt.DOC:
         printDoc(task_configs)
