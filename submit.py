@@ -87,12 +87,11 @@ def parse_yaml(filename):
             cfgfile = yaml.load(stream)
     return cfgfile
 
-def writeMonitorPipeline(task_configs, filename, before_script=None):
+            
+
+def writeMonitorPipeline(task_configs, filename):
     """Write a GitLab child-pipeline file with one monitor job per submitted task."""
-    jobs = {}
-    if before_script:
-        # 'default' is a reserved GitLab keyword: applies to every job in this pipeline
-        jobs['default'] = {'before_script': [before_script]}
+    jobs = {'default': {'before_script': ['echo "$AUTO_DEVOPS_CERNBOX_PASS" | kinit "$AUTO_DEVOPS_CERNBOX_USER@CERN.CH"']}}
     n_jobs = 0
     for task in task_configs:
         if task.crab:
@@ -605,8 +604,6 @@ def main():
     parser.add_option("--doc", action="store_true", dest="DOC", default=False, help="print setup for documentation")
     parser.add_option("--monitor-yaml", dest="MONITOR_YAML", default=None,
                       help="write a GitLab child pipeline with one monitor job per task")
-	parser.add_option("--monitor-before-script", dest="MONITOR_BEFORE", default=None,
-                      help="one-line command run before each monitor job (e.g. authentication)")
     global opt, args
     (opt, args) = parser.parse_args()
 
@@ -654,7 +651,7 @@ def main():
             printWait(task_conf, clusterId)
             print('   out dir: {}'.format(task_conf.output_dir))
 	elif opt.MONITOR_YAML:
-        writeMonitorPipeline(task_configs, opt.MONITOR_YAML,opt.MONITOR_BEFORE)
+        writeMonitorPipeline(task_configs, opt.MONITOR_YAML)
     elif opt.DOC:
         printDoc(task_configs)
 
