@@ -30,9 +30,9 @@ def createDagConfig(task_configs):
     first = task_configs[0]
     base_dir = first.task_base_dir
 
-    # FINAL node: submit file + script (templates/notify.sh does the curl to GitLab)
+    # FINAL node: submit file + script (scripts/notify.sh does the curl to GitLab)
     notify_sh = os.path.join(base_dir, 'notify.sh')
-    shutil.copy('templates/notify.sh', notify_sh)
+    shutil.copy('scripts/notify.sh', notify_sh)
     os.chmod(notify_sh, 0o754)
 
     notify_sub_name = os.path.join(base_dir, 'notify.sub')
