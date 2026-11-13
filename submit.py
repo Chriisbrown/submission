@@ -1,76 +1,25 @@
-###!/usr/bin/python
+#!/usr/bin/python
 
 import optparse
-import configparser
 import os
 import sys
 import shutil
 import subprocess
 import platform
 import tarfile
+import re
+import math
 import git
 from process_pickler import pickler
-import re 
+
 import yaml
 
-def dagNodeName(task_name):
-    """DAGMan node names should be plain identifiers"""
-    return re.sub(r'[^A-Za-z0-9_]', '_', task_name)
+# Authentication line run before every monitor job in the generated child pipeline.
+# Reference CI/CD variables (e.g. $KEYTAB_FILE) rather than literal secrets: the generated
+# monitor-pipeline.yml is a downloadable artifact. PLACEHOLDER: replace with your real command.
+MONITOR_BEFORE_SCRIPT = 'kinit -kt "$KEYTAB_FILE" "$KRB_USER"'
 
 
-def getDagFileName(task_config):
-    return os.path.join(os.path.abspath(task_config.log_file_folder), 'run.dag')
-
-
-def createDagConfig(task_config):
-    log_dir = os.path.abspath(task_config.log_file_folder)
-    os.makedirs(log_dir, exist_ok=True)
-	
-    notify_sh = os.path.join(log_dir, 'notify.sh')
-    shutil.copy('templates/notify.sh', notify_sh)
-    os.chmod(notify_sh, 0o754)
-
-    notify_sub_name = os.path.join(log_dir, 'notify.sub')
-    with open(notify_sub_name, 'w') as notify_sub:
-        notify_sub.write('\n'.join([
-            'universe     = local',
-            'executable   = {}'.format(notify_sh),
-            'arguments    = "$(DAG_STATUS) $(FAILED_COUNT)"',
-            'environment  = "CONDOR_NAME={name} CONDOR_VERSION={version} CONDOR_TASK={task} '
-            'CONDOR_OUTDIR={outdir} TOKEN_FILE=$ENV(HOME)/.gitlab_trigger_token"'.format(
-                name=task_config.task_base_dir.split('/')[0],
-                version=task_config.version,
-                task=task_config.task_name,
-                outdir=task_config.output_dir),
-            'log          = {}/notify.log'.format(log_dir),
-            'output       = {}/notify.out'.format(log_dir),
-            'error        = {}/notify.err'.format(log_dir),
-            'notification = Never',
-            'queue',
-            ''
-        ]))
-
-    sub_file = os.path.abspath(os.path.join(task_config.task_dir, 'conf', 'condorSubmit.sub'))
-    dag_name = getDagFileName(task_config)
-    with open(dag_name, 'w') as dag:
-        dag.write('JOB {} {}\n'.format(dagNodeName(task_config.task_name), sub_file))
-        dag.write('FINAL notify {}\n'.format(notify_sub_name))
-        dag.write('NODE_STATUS_FILE {}/run.dag.status 60 ALWAYS-UPDATE\n'.format(log_dir))
-    print('   created DAG file {}'.format(dag_name))
-
-
-def submitDag(sub_name, task_config):
-    dag_name = getDagFileName(task_config)
-    submit_cmd = 'condor_submit_dag -batch-name {}_{} {}'.format(
-        sub_name, task_config.task_name, dag_name)
-    try:
-        output = subprocess.check_output(submit_cmd, shell=True).splitlines()
-    except subprocess.CalledProcessError as e:
-        print('Command: {} FAILED!'.format(submit_cmd))
-        output = e.output.splitlines()
-    for line in output:
-        print(line.decode('UTF-8'))
-		
 def parse_yaml(filename):
     with open(filename, 'r') as stream:
         if '3.' in platform.python_version():
@@ -79,31 +28,6 @@ def parse_yaml(filename):
             cfgfile = yaml.load(stream)
     return cfgfile
 
-            
-
-def writeMonitorPipeline(task_configs, filename):
-    """Write a GitLab child-pipeline file with one monitor job per submitted task."""
-    jobs = {'default': {'before_script': ['echo "$AUTO_DEVOPS_CERNBOX_PASS" | kinit "$AUTO_DEVOPS_CERNBOX_USER@CERN.CH"']}}
-    n_jobs = 0
-    for task in task_configs:
-        if task.crab:
-            continue  # no DAG for crab tasks
-        jobs['monitor-{}'.format(dagNodeName(task.task_name))] = {
-            'tags': ['k8s-cvmfs'],
-			'image': 'gitlab-registry.cern.ch/cms-cloud/cmssw-docker/al8-cms:latest',
-            'timeout': '1h',
-            'variables': {
-                'TASK': task.task_name,
-                'DAG_DIR': os.path.abspath(task.log_file_folder),
-            },
-            'script': ['bash scripts/monitor_dag.sh "$DAG_DIR"'],
-        }
-        n_jobs += 1
-    if n_jobs == 0:  # a child pipeline with no jobs is an error
-        jobs['nothing-to-monitor'] = {'script': ['echo "no condor tasks submitted"']}
-    with open(filename, 'w') as f:
-        yaml.safe_dump(jobs, f, default_flow_style=False, sort_keys=False)
-    print('   wrote {} with {} monitor job(s)'.format(filename, n_jobs))
 
 class SandboxTarball(object):
     def __init__(self, name=None, mode='w:bz2', params=None):
@@ -140,11 +64,9 @@ class SandboxTarball(object):
                 self.checkdirectory(root)
                 self.tarfile.add(root, directory, recursive=True)
 
-
     def writeContent(self):
         """Save the content of the tarball"""
         self.content = [(int(x.size), x.name) for x in self.tarfile.getmembers()]
-
 
     def close(self):
         """
@@ -155,31 +77,27 @@ class SandboxTarball(object):
 
     def printSortedContent(self):
         """
-	To be used for diagnostic printouts
+        To be used for diagnostic printouts
         returns a string containing tarball content as a list of files sorted by size
         already formatted for use in a print statement
         """
         sortedContent = sorted(self.content, reverse=True)
         biggestFileSize = sortedContent[0][0]
-        ndigits = int(math.ceil(math.log(biggestFileSize+1, 10)))
+        ndigits = int(math.ceil(math.log(biggestFileSize + 1, 10)))
         contentList = "\nsandbox content sorted by size[Bytes]:"
         for (size, name) in sortedContent:
             contentList += ("\n%" + str(ndigits) + "s\t%s") % (size, name)
         return contentList
 
-
     def checkdirectory(self, dir_):
-        #checking for infinite symbolic link loop
+        # checking for infinite symbolic link loop
         try:
             for root, _, files in os.walk(dir_, followlinks=True):
                 for file_ in files:
                     os.stat(os.path.join(root, file_))
         except OSError as msg:
-            err = '%sError%s: Infinite directory loop found in: %s \nStderr: %s' % \
-                    (colors.RED, colors.NORMAL, dir_, msg)
-            raise EnvironmentException(err)
-
-
+            err = 'Error: Infinite directory loop found in: %s \nStderr: %s' % (dir_, msg)
+            raise RuntimeError(err)
 
 
 class TaskConfig:
@@ -191,8 +109,7 @@ class TaskConfig:
         self.task_name = taskName
         self.version = common_config['version']
         self.cmssw_config = common_config['cmssw_config']
-        self.log_file_folder = os.path.join(common_config['log_file_folder'],taskName,'logs')
-		
+
         for key, value in list(task_config.items()):
             setattr(self, key, value)
 
@@ -211,6 +128,13 @@ class TaskConfig:
             self.version)
         self.ncpu = common_config['ncpu']
         self.output_file_name = common_config['output_file_name']
+
+        # DAGMan output for this dataset: <log_file_folder>/<task name>/logs
+        # (set after the loop above so a stray key in the task section cannot override it)
+        self.log_file_folder = os.path.join(
+            common_config['log_file_folder'],
+            taskName,
+            'logs')
 
     def __str__(self):
         return 'task-name {}: version {}'.format(self.task_name, self.version)
@@ -283,7 +207,6 @@ def getFilesForDataset(dataset, site=None):
             return []
 
 
-
 def getJobParams(mode, task_conf):
     params = {}
     if mode == 'NTP' or mode == 'L1IN' or mode == 'SIMDIGI':
@@ -342,7 +265,7 @@ def getJobParams(mode, task_conf):
             print(len(split_pu_files))
         # the first 2 are compulsory for all modes
         params['PUFILES'] = split_pu_files
-        
+
         params['TEMPL_TASKBASEDIR'] = task_conf.task_base_dir
         params['TEMPL_ABSTASKBASEDIR'] = os.path.join(os.environ["PWD"], task_conf.task_base_dir)
         params['TEMPL_TASKDIR'] = task_conf.task_dir
@@ -372,7 +295,6 @@ def getJobParams(mode, task_conf):
             params['TEMPL_CMSSWBASE'] = get_from_env('CMSSW_BASE')
             params['TEMPL_CMSSWVERSION'] = get_from_env('CMSSW_VERSION')
 
-
     else:
         print('Mode: {} is not implemented! Exiting...'.format(mode))
         sys.exit(4)
@@ -393,6 +315,7 @@ def createJobSandbox(params):
         sb_tar.close()
     else:
         print(('NOTE: Sandbox tar: {} already exists, reusing it!'.format(sb_tar_name)))
+
 
 def createJobConfig(mode, params):
     custom_template_filename = 'templates/jobCustomization_{}_cfg.py'.format(mode)
@@ -465,7 +388,7 @@ def createJobExecutable(mode, params):
     templs_keys = [key for key in list(params.keys()) if 'TEMPL_' in key]
     for key in templs_keys:
         params_file.write('{}={}\n'.format(key.split('_')[1], str(params[key])))
-    
+
     params_file.close()
 
 
@@ -504,7 +427,6 @@ def createTaskSetup(task_config, config_file):
             print(sys.exit(2))
 
     # shutil.copy(task_config.cmssw_config, '{}/conf/input_cfg.py'.format(task_config.task_dir))
-    
 
     params = getJobParams(mode, task_config)
     if not task_config.crab:
@@ -522,10 +444,64 @@ def createTaskSetup(task_config, config_file):
     return
 
 
-def submitTask(sub_name, task_config):
-    submit_cmd = 'condor_submit {}/conf/condorSubmit.sub -batch-name {}_{}'.format(task_config.task_dir, sub_name, task_config.task_name)
-    if task_config.crab:
-        submit_cmd = 'crab submit {}/conf/crab.py'.format(task_config.task_dir)
+def dagNodeName(task_name):
+    """DAGMan node names should be plain identifiers"""
+    return re.sub(r'[^A-Za-z0-9_]', '_', task_name)
+
+
+def getDagFileName(task_config):
+    return os.path.join(os.path.abspath(task_config.log_file_folder), 'run.dag')
+
+
+def createDagConfig(task_config):
+    """
+    One DAG per task, written into <log_file_folder>/<task name>/logs so that all
+    DAGMan output for the dataset ends up there. The DAG has one node (the task's
+    existing condorSubmit.sub) plus a FINAL node that calls the webhook.
+    """
+    log_dir = os.path.abspath(task_config.log_file_folder)
+    os.makedirs(log_dir, exist_ok=True)
+
+    # FINAL node: script + submit file
+    notify_sh = os.path.join(log_dir, 'notify.sh')
+    shutil.copy('templates/notify.sh', notify_sh)
+    os.chmod(notify_sh, 0o754)
+
+    notify_sub_name = os.path.join(log_dir, 'notify.sub')
+    with open(notify_sub_name, 'w') as notify_sub:
+        notify_sub.write('\n'.join([
+            '# local universe: runs on the submit host, which has outbound network access',
+            'universe     = local',
+            'executable   = {}'.format(notify_sh),
+            'arguments    = "$(DAG_STATUS) $(FAILED_COUNT)"',
+            'environment  = "CONDOR_NAME={name} CONDOR_VERSION={version} CONDOR_TASK={task} '
+            'CONDOR_OUTDIR={outdir} TOKEN_FILE=$ENV(HOME)/.gitlab_trigger_token"'.format(
+                name=task_config.task_base_dir.split('/')[0],
+                version=task_config.version,
+                task=task_config.task_name,
+                outdir=task_config.output_dir),
+            'log          = {}/notify.log'.format(log_dir),
+            'output       = {}/notify.out'.format(log_dir),
+            'error        = {}/notify.err'.format(log_dir),
+            'notification = Never',
+            'queue',
+            ''
+        ]))
+
+    # Absolute path, because the DAG lives elsewhere and nodes run from the launch directory
+    sub_file = os.path.abspath(os.path.join(task_config.task_dir, 'conf', 'condorSubmit.sub'))
+    dag_name = getDagFileName(task_config)
+    with open(dag_name, 'w') as dag:
+        dag.write('JOB {} {}\n'.format(dagNodeName(task_config.task_name), sub_file))
+        dag.write('FINAL notify {}\n'.format(notify_sub_name))
+        dag.write('NODE_STATUS_FILE {}/run.dag.status 60 ALWAYS-UPDATE\n'.format(log_dir))
+    print('   created DAG file {}'.format(dag_name))
+
+
+def submitDag(sub_name, task_config):
+    dag_name = getDagFileName(task_config)
+    submit_cmd = 'condor_submit_dag -batch-name {}_{} {}'.format(
+        sub_name, task_config.task_name, dag_name)
     try:
         output = subprocess.check_output(submit_cmd, shell=True).splitlines()
     except subprocess.CalledProcessError as e:
@@ -533,6 +509,43 @@ def submitTask(sub_name, task_config):
         output = e.output.splitlines()
     for line in output:
         print(line.decode('UTF-8'))
+
+
+def submitTask(sub_name, task_config):
+    """Used for crab tasks only; batch tasks are submitted through their DAG (submitDag)"""
+    submit_cmd = 'crab submit {}/conf/crab.py'.format(task_config.task_dir)
+    try:
+        output = subprocess.check_output(submit_cmd, shell=True).splitlines()
+    except subprocess.CalledProcessError as e:
+        print('Command: {} FAILED!'.format(submit_cmd))
+        output = e.output.splitlines()
+    for line in output:
+        print(line.decode('UTF-8'))
+
+
+def writeMonitorPipeline(task_configs, filename):
+    """Write a GitLab child-pipeline file with one monitor job per submitted task."""
+    jobs = {'default': {'before_script': ['echo "$AUTO_DEVOPS_CERNBOX_PASS" | kinit "$AUTO_DEVOPS_CERNBOX_USER@CERN.CH"']}}
+    n_jobs = 0
+    for task in task_configs:
+        if task.crab:
+            continue  # no DAG for crab tasks
+        jobs['monitor-{}'.format(dagNodeName(task.task_name))] = {
+            'tags': ['k8s-cvmfs'],
+			'image': 'gitlab-registry.cern.ch/cms-cloud/cmssw-docker/al8-cms:latest',
+            'timeout': '1h',
+            'variables': {
+                'TASK': task.task_name,
+                'DAG_DIR': os.path.abspath(task.log_file_folder),
+            },
+            'script': ['bash scripts/monitor_dag.sh "$DAG_DIR"'],
+        }
+        n_jobs += 1
+    if n_jobs == 0:  # a child pipeline with no jobs is an error
+        jobs['nothing-to-monitor'] = {'script': ['echo "no condor tasks submitted"']}
+    with open(filename, 'w') as f:
+        yaml.safe_dump(jobs, f, default_flow_style=False, sort_keys=False)
+    print('   wrote {} with {} monitor job(s)'.format(filename, n_jobs))
 
 
 def getCondorCluster(task_config):
@@ -552,6 +565,7 @@ def printStatus(clusterId):
         print('Command: {} FAILED!'.format(condor_cmd))
         print(e.output)
 
+
 def printWait(task_conf, clusterId):
     condor_cmd = 'condor_wait -wait 30 -status {}/logs/condor.{}.log'.format(task_conf.task_dir, clusterId)
     try:
@@ -566,7 +580,6 @@ def printDoc(task_configs):
 
     cmssw_repo = git.Repo(cmssw_src)
     ntp_src = os.path.join(cmssw_src, 'Phase2EGTriggerAnalysis')
-    
 
     print('\n\n\n')
     print(f'## {task_configs[0].version}')
@@ -595,19 +608,14 @@ def main():
     parser.add_option("--status", action="store_true", dest="STATUS", default=False, help="check the status of the condor tasks")
     parser.add_option("--doc", action="store_true", dest="DOC", default=False, help="print setup for documentation")
     parser.add_option("--monitor-yaml", dest="MONITOR_YAML", default=None,
-                      help="write a GitLab child pipeline with one monitor job per task")
+                      help="write a GitLab child pipeline with one monitor job per task to this file")
+
     global opt, args
     (opt, args) = parser.parse_args()
 
-    # cfgfile = ConfigParser.ConfigParser()
-    # cfgfile.optionxform = str
-    # 
-    # cfgfile.read(opt.CONFIGFILE)
-    
-    
     cfgfile = {}
     cfgfile.update(parse_yaml(opt.CONFIGFILE))
-    
+
     sub_name = cfgfile['Common']['name']
     tasks = cfgfile['Common']['tasks']
     task_configs = []
@@ -618,23 +626,19 @@ def main():
     for task_conf in task_configs:
         print(task_conf)
 
-    batch_tasks = [t for t in task_configs if not t.crab]
-
     if opt.CREATE:
         for task_conf in task_configs:
             print('-- Creating task {}'.format(task_conf.task_name))
             createTaskSetup(task_conf, cfgfile)
-        if batch_tasks:
-            print('-- Creating DAG for {} tasks'.format(len(batch_tasks)))
-            createDagConfig(batch_tasks)
+            if not task_conf.crab:
+                createDagConfig(task_conf)
     elif opt.SUBMIT:
-        if batch_tasks:
-            print('-- Submitting DAG for tasks: {}'.format([t.task_name for t in batch_tasks]))
-            submitDag(sub_name, batch_tasks)
         for task_conf in task_configs:
+            print('-- Submitting task {}'.format(task_conf.task_name))
             if task_conf.crab:
-                print('-- Submitting CRAB task {}'.format(task_conf.task_name))
                 submitTask(sub_name, task_conf)
+            else:
+                submitDag(sub_name, task_conf)
     elif opt.STATUS:
         for task_conf in task_configs:
             print('-- Status of task {}'.format(task_conf.task_name))
@@ -642,10 +646,12 @@ def main():
             printStatus(clusterId)
             printWait(task_conf, clusterId)
             print('   out dir: {}'.format(task_conf.output_dir))
-    elif opt.MONITOR_YAML:
-        writeMonitorPipeline(task_configs, opt.MONITOR_YAML)
+            print('   dag log dir: {}'.format(os.path.abspath(task_conf.log_file_folder)))
     elif opt.DOC:
         printDoc(task_configs)
+    elif opt.MONITOR_YAML:
+        writeMonitorPipeline(task_configs, opt.MONITOR_YAML)
+
 
 if __name__ == "__main__":
     main()
