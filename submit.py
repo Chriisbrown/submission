@@ -22,17 +22,11 @@ def getDagFileName(task_config):
     return os.path.join(os.path.abspath(task_config.log_file_folder), 'run.dag')
 
 
-def createDagConfig(task_configs):
-    """
-    One DAG per config file, written into log_file_folder so that all
-    DAGMan output ends up there. One node per task plus a FINAL node
-    that calls the webhook.
-    """
-    first = task_configs[0]
-    log_dir = os.path.abspath(task_config.log_file_folder)
+def createDagConfig(task_config):
+
+	log_dir = os.path.abspath(task_config.log_file_folder)
     os.makedirs(log_dir, exist_ok=True)
 
-    # FINAL node: script + submit file
     notify_sh = os.path.join(log_dir, 'notify.sh')
     shutil.copy('templates/notify.sh', notify_sh)
     os.chmod(notify_sh, 0o754)
@@ -43,11 +37,12 @@ def createDagConfig(task_configs):
             'universe     = local',
             'executable   = {}'.format(notify_sh),
             'arguments    = "$(DAG_STATUS) $(FAILED_COUNT)"',
-            'environment  = "CONDOR_NAME={name} CONDOR_VERSION={version} CONDOR_OUTDIR_BASE={outdir} '
-            'TOKEN_FILE=$ENV(HOME)/.gitlab_trigger_token"'.format(
-                name=first.task_base_dir.split('/')[0],
-                version=first.version,
-                outdir=first.output_dir_base),
+            'environment  = "CONDOR_NAME={name} CONDOR_VERSION={version} CONDOR_TASK={task} '
+            'CONDOR_OUTDIR={outdir} TOKEN_FILE=$ENV(HOME)/.gitlab_trigger_token"'.format(
+                name=task_config.task_base_dir.split('/')[0],
+                version=task_config.version,
+                task=task_config.task_name,
+                outdir=task_config.output_dir),
             'log          = {}/notify.log'.format(log_dir),
             'output       = {}/notify.out'.format(log_dir),
             'error        = {}/notify.err'.format(log_dir),
@@ -56,21 +51,19 @@ def createDagConfig(task_configs):
             ''
         ]))
 
-    dag_name = getDagFileName(first)
+    sub_file = os.path.abspath(os.path.join(task_config.task_dir, 'conf', 'condorSubmit.sub'))
+    dag_name = getDagFileName(task_config)
     with open(dag_name, 'w') as dag:
-        for task in task_configs:
-            node = dagNodeName(task.task_name)
-            sub_file = os.path.abspath(os.path.join(task.task_dir, 'conf', 'condorSubmit.sub'))
-            dag.write('JOB {} {}\n'.format(node, sub_file))
+        dag.write('JOB {} {}\n'.format(dagNodeName(task_config.task_name), sub_file))
         dag.write('FINAL notify {}\n'.format(notify_sub_name))
         dag.write('NODE_STATUS_FILE {}/run.dag.status 60 ALWAYS-UPDATE\n'.format(log_dir))
     print('   created DAG file {}'.format(dag_name))
 
 
-def submitDag(sub_name, task_configs):
-    dag_name = getDagFileName(task_configs[0])
+def submitDag(sub_name, task_config):
+    dag_name = getDagFileName(task_config)
     submit_cmd = 'condor_submit_dag -batch-name {}_{} {}'.format(
-        sub_name, task_configs[0].version, dag_name)
+        sub_name, task_config.task_name, dag_name)
     try:
         output = subprocess.check_output(submit_cmd, shell=True).splitlines()
     except subprocess.CalledProcessError as e:
