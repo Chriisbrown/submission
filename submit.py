@@ -23,8 +23,8 @@ def getDagFileName(task_config):
 
 
 def createDagConfig(task_config):
-	log_dir = os.path.abspath(task_config.log_file_folder)
-	os.makedirs(log_dir, exist_ok=True)
+    log_dir = os.path.abspath(task_config.log_file_folder)
+    os.makedirs(log_dir, exist_ok=True)
 	
     notify_sh = os.path.join(log_dir, 'notify.sh')
     shutil.copy('templates/notify.sh', notify_sh)
