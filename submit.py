@@ -198,8 +198,8 @@ class TaskConfig:
 
         self.task_name = taskName
         self.version = common_config['version']
-		self.cmssw_config = common_config['cmssw_config']
-		self.log_file_folder = os.path.join(common_config['log_file_folder'],taskName,'logs')
+        self.cmssw_config = common_config['cmssw_config']
+        self.log_file_folder = os.path.join(common_config['log_file_folder'],taskName,'logs')
 		
         for key, value in list(task_config.items()):
             setattr(self, key, value)
