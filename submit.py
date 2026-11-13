@@ -78,6 +78,7 @@ def submitDag(sub_name, task_configs):
         output = e.output.splitlines()
     for line in output:
         print(line.decode('UTF-8'))
+		
 def parse_yaml(filename):
     with open(filename, 'r') as stream:
         if '3.' in platform.python_version():
@@ -86,6 +87,26 @@ def parse_yaml(filename):
             cfgfile = yaml.load(stream)
     return cfgfile
 
+def writeMonitorPipeline(task_configs, filename):
+    """Write a GitLab child-pipeline file with one monitor job per submitted task."""
+    jobs = {}
+    for task in task_configs:
+        if task.crab:
+            continue  # no DAG for crab tasks
+        jobs['monitor-{}'.format(dagNodeName(task.task_name))] = {
+            'tags': ['condor-submit-host'],
+            'timeout': '12h',
+            'variables': {
+                'TASK': task.task_name,
+                'DAG_DIR': os.path.abspath(task.log_file_folder),
+            },
+            'script': ['bash scripts/monitor_dag.sh "$DAG_DIR"'],
+        }
+    if not jobs:  # a child pipeline with no jobs is an error
+        jobs['nothing-to-monitor'] = {'script': ['echo "no condor tasks submitted"']}
+    with open(filename, 'w') as f:
+        yaml.safe_dump(jobs, f, default_flow_style=False, sort_keys=False)
+    print('   wrote {} with {} monitor job(s)'.format(filename, len(jobs)))
 
 class SandboxTarball(object):
     def __init__(self, name=None, mode='w:bz2', params=None):
@@ -173,10 +194,7 @@ class TaskConfig:
         self.task_name = taskName
         self.version = common_config['version']
         self.cmssw_config = common_config['cmssw_config']
-		self.log_file_folder = os.path.join(
-            common_config['log_file_folder'],
-            taskName,
-            'logs')
+		self.log_file_folder = os.path.join(common_config['log_file_folder'],taskName,'logs')
         
         for key, value in list(task_config.items()):
             setattr(self, key, value)
@@ -579,7 +597,8 @@ def main():
     parser.add_option("--submit", action="store_true", dest="SUBMIT", default=False, help="submit the jobs to condor")
     parser.add_option("--status", action="store_true", dest="STATUS", default=False, help="check the status of the condor tasks")
     parser.add_option("--doc", action="store_true", dest="DOC", default=False, help="print setup for documentation")
-
+    parser.add_option("--monitor-yaml", dest="MONITOR_YAML", default=None,
+                      help="write a GitLab child pipeline with one monitor job per task")
     global opt, args
     (opt, args) = parser.parse_args()
 
@@ -626,6 +645,8 @@ def main():
             printStatus(clusterId)
             printWait(task_conf, clusterId)
             print('   out dir: {}'.format(task_conf.output_dir))
+	elif opt.MONITOR_YAML:
+        writeMonitorPipeline(task_configs, opt.MONITOR_YAML)
     elif opt.DOC:
         printDoc(task_configs)
 
