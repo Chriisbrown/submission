@@ -19,49 +19,51 @@ def dagNodeName(task_name):
 
 
 def getDagFileName(task_config):
-    return os.path.join(task_config.task_base_dir, 'run.dag')
+    return os.path.join(os.path.abspath(task_config.log_file_folder), 'run.dag')
 
 
 def createDagConfig(task_configs):
     """
-    One DAG per config file: one node per task, plus a FINAL node that
-    always runs at the end (success or failure) and calls the webhook.
+    One DAG per config file, written into log_file_folder so that all
+    DAGMan output ends up there. One node per task plus a FINAL node
+    that calls the webhook.
     """
     first = task_configs[0]
-    base_dir = first.task_base_dir
+    log_dir = os.path.abspath(task_config.log_file_folder)
+    os.makedirs(log_dir, exist_ok=True)
 
-    # FINAL node: submit file + script (scripts/notify.sh does the curl to GitLab)
-    notify_sh = os.path.join(base_dir, 'notify.sh')
-    shutil.copy('scripts/notify.sh', notify_sh)
+    # FINAL node: script + submit file
+    notify_sh = os.path.join(log_dir, 'notify.sh')
+    shutil.copy('templates/notify.sh', notify_sh)
     os.chmod(notify_sh, 0o754)
 
-    notify_sub_name = os.path.join(base_dir, 'notify.sub')
+    notify_sub_name = os.path.join(log_dir, 'notify.sub')
     with open(notify_sub_name, 'w') as notify_sub:
         notify_sub.write('\n'.join([
-            '# local universe: runs on the submit host, which has outbound network access',
             'universe     = local',
-            'executable   = {}'.format(os.path.abspath(notify_sh)),
+            'executable   = {}'.format(notify_sh),
             'arguments    = "$(DAG_STATUS) $(FAILED_COUNT)"',
             'environment  = "CONDOR_NAME={name} CONDOR_VERSION={version} CONDOR_OUTDIR_BASE={outdir} '
             'TOKEN_FILE=$ENV(HOME)/.gitlab_trigger_token"'.format(
                 name=first.task_base_dir.split('/')[0],
                 version=first.version,
                 outdir=first.output_dir_base),
-            'log          = {}notify.log'.format(base_dir),
-            'output       = {}notify.out'.format(base_dir),
-            'error        = {}notify.err'.format(base_dir),
+            'log          = {}/notify.log'.format(log_dir),
+            'output       = {}/notify.out'.format(log_dir),
+            'error        = {}/notify.err'.format(log_dir),
             'notification = Never',
             'queue',
             ''
         ]))
 
-    # The DAG itself
     dag_name = getDagFileName(first)
     with open(dag_name, 'w') as dag:
         for task in task_configs:
             node = dagNodeName(task.task_name)
-            dag.write('JOB {} {}/conf/condorSubmit.sub\n'.format(node, task.task_dir))
+            sub_file = os.path.abspath(os.path.join(task.task_dir, 'conf', 'condorSubmit.sub'))
+            dag.write('JOB {} {}\n'.format(node, sub_file))
         dag.write('FINAL notify {}\n'.format(notify_sub_name))
+        dag.write('NODE_STATUS_FILE {}/run.dag.status 60 ALWAYS-UPDATE\n'.format(log_dir))
     print('   created DAG file {}'.format(dag_name))
 
 
@@ -76,7 +78,6 @@ def submitDag(sub_name, task_configs):
         output = e.output.splitlines()
     for line in output:
         print(line.decode('UTF-8'))
-
 def parse_yaml(filename):
     with open(filename, 'r') as stream:
         if '3.' in platform.python_version():
@@ -172,7 +173,10 @@ class TaskConfig:
         self.task_name = taskName
         self.version = common_config['version']
         self.cmssw_config = common_config['cmssw_config']
-		self.log_file_folder = common_config['log_file_folder']
+		self.log_file_folder = os.path.join(
+            common_config['log_file_folder'],
+            taskName,
+            'logs')
         
         for key, value in list(task_config.items()):
             setattr(self, key, value)
