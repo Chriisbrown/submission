@@ -94,8 +94,9 @@ def writeMonitorPipeline(task_configs, filename):
         if task.crab:
             continue  # no DAG for crab tasks
         jobs['monitor-{}'.format(dagNodeName(task.task_name))] = {
-            'tags': ['condor-submit-host'],
-            'timeout': '12h',
+            'tags': ['k8s-cvmfs'],
+            'image': gitlab-registry.cern.ch/cms-cloud/cmssw-docker/al8-cms:latest
+            'timeout': '1h',
             'variables': {
                 'TASK': task.task_name,
                 'DAG_DIR': os.path.abspath(task.log_file_folder),
