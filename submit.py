@@ -212,8 +212,8 @@ def getJobParams(mode, task_conf):
             elif hasattr(task_conf, 'input_dataset'):
                 print(('Reading inpout files from dataset: {}'.format(task_conf.input_dataset)))
                 #input_files = getFilesForDataset(task_conf.input_dataset, site='T2_CH_CERN')
-                input_files = getFilesForDataset(task_conf.input_dataset, site='T2_US_UCSD')
-                #input_files = getFilesForDataset(task_conf.input_dataset)
+                #input_files = getFilesForDataset(task_conf.input_dataset, site='T2_US_UCSD')
+                input_files = getFilesForDataset(task_conf.input_dataset)
                 input_files = ['root://cmsxrootd.fnal.gov/' + f for f in input_files]
             else:
                 print(('ERROR: no input specified for task: {}'.format(task_conf.task_name)))
