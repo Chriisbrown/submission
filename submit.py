@@ -464,7 +464,7 @@ def createDagConfig(task_config):
 
     # FINAL node: script + submit file
     notify_sh = os.path.join(log_dir, 'notify.sh')
-    shutil.copy('templates/notify.sh', notify_sh)
+    shutil.copy('scripts/notify.sh', notify_sh)
     os.chmod(notify_sh, 0o754)
 
     notify_sub_name = os.path.join(log_dir, 'notify.sub')
