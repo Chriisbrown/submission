@@ -10,7 +10,7 @@ import platform
 import tarfile
 import git
 from process_pickler import pickler
-
+import re 
 import yaml
 
 def dagNodeName(task_name):
