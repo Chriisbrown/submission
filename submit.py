@@ -13,6 +13,70 @@ from process_pickler import pickler
 
 import yaml
 
+def dagNodeName(task_name):
+    """DAGMan node names should be plain identifiers"""
+    return re.sub(r'[^A-Za-z0-9_]', '_', task_name)
+
+
+def getDagFileName(task_config):
+    return os.path.join(task_config.task_base_dir, 'run.dag')
+
+
+def createDagConfig(task_configs):
+    """
+    One DAG per config file: one node per task, plus a FINAL node that
+    always runs at the end (success or failure) and calls the webhook.
+    """
+    first = task_configs[0]
+    base_dir = first.task_base_dir
+
+    # FINAL node: submit file + script (templates/notify.sh does the curl to GitLab)
+    notify_sh = os.path.join(base_dir, 'notify.sh')
+    shutil.copy('templates/notify.sh', notify_sh)
+    os.chmod(notify_sh, 0o754)
+
+    notify_sub_name = os.path.join(base_dir, 'notify.sub')
+    with open(notify_sub_name, 'w') as notify_sub:
+        notify_sub.write('\n'.join([
+            '# local universe: runs on the submit host, which has outbound network access',
+            'universe     = local',
+            'executable   = {}'.format(os.path.abspath(notify_sh)),
+            'arguments    = "$(DAG_STATUS) $(FAILED_COUNT)"',
+            'environment  = "CONDOR_NAME={name} CONDOR_VERSION={version} CONDOR_OUTDIR_BASE={outdir} '
+            'TOKEN_FILE=$ENV(HOME)/.gitlab_trigger_token"'.format(
+                name=first.task_base_dir.split('/')[0],
+                version=first.version,
+                outdir=first.output_dir_base),
+            'log          = {}notify.log'.format(base_dir),
+            'output       = {}notify.out'.format(base_dir),
+            'error        = {}notify.err'.format(base_dir),
+            'notification = Never',
+            'queue',
+            ''
+        ]))
+
+    # The DAG itself
+    dag_name = getDagFileName(first)
+    with open(dag_name, 'w') as dag:
+        for task in task_configs:
+            node = dagNodeName(task.task_name)
+            dag.write('JOB {} {}/conf/condorSubmit.sub\n'.format(node, task.task_dir))
+        dag.write('FINAL notify {}\n'.format(notify_sub_name))
+    print('   created DAG file {}'.format(dag_name))
+
+
+def submitDag(sub_name, task_configs):
+    dag_name = getDagFileName(task_configs[0])
+    submit_cmd = 'condor_submit_dag -batch-name {}_{} {}'.format(
+        sub_name, task_configs[0].version, dag_name)
+    try:
+        output = subprocess.check_output(submit_cmd, shell=True).splitlines()
+    except subprocess.CalledProcessError as e:
+        print('Command: {} FAILED!'.format(submit_cmd))
+        output = e.output.splitlines()
+    for line in output:
+        print(line.decode('UTF-8'))
+
 def parse_yaml(filename):
     with open(filename, 'r') as stream:
         if '3.' in platform.python_version():
@@ -533,16 +597,23 @@ def main():
     for task_conf in task_configs:
         print(task_conf)
 
+    batch_tasks = [t for t in task_configs if not t.crab]
+
     if opt.CREATE:
         for task_conf in task_configs:
             print('-- Creating task {}'.format(task_conf.task_name))
-            # 1 create local dir
             createTaskSetup(task_conf, cfgfile)
+        if batch_tasks:
+            print('-- Creating DAG for {} tasks'.format(len(batch_tasks)))
+            createDagConfig(batch_tasks)
     elif opt.SUBMIT:
+        if batch_tasks:
+            print('-- Submitting DAG for tasks: {}'.format([t.task_name for t in batch_tasks]))
+            submitDag(sub_name, batch_tasks)
         for task_conf in task_configs:
-            print('-- Submitting task {}'.format(task_conf.task_name))
-            # 1 create local dir
-            submitTask(sub_name, task_conf)
+            if task_conf.crab:
+                print('-- Submitting CRAB task {}'.format(task_conf.task_name))
+                submitTask(sub_name, task_conf)
     elif opt.STATUS:
         for task_conf in task_configs:
             print('-- Status of task {}'.format(task_conf.task_name))
