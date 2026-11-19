@@ -4,6 +4,7 @@ import optparse
 import configparser
 import os
 import re
+import shlex
 import sys
 import shutil
 import subprocess
@@ -15,6 +16,12 @@ from math import ceil
 # from process_pickler import pickler
 
 import yaml
+
+# Authentication line run before every monitor job in the generated child pipeline.
+# Reference CI/CD variables rather than literal secrets: the generated
+# monitor-pipeline.yml is a downloadable artifact.
+MONITOR_BEFORE_SCRIPT = 'echo "$AUTO_DEVOPS_CERNBOX_PASS" | kinit "$AUTO_DEVOPS_CERNBOX_USER@CERN.CH"'
+
 
 def parse_yaml(filename):
     with open(filename, 'r') as stream:
@@ -76,7 +83,7 @@ class SandboxTarball(object):
 
     def printSortedContent(self):
         """
-	To be used for diagnostic printouts
+        To be used for diagnostic printouts
         returns a string containing tarball content as a list of files sorted by size
         already formatted for use in a print statement
         """
@@ -104,7 +111,7 @@ class SandboxTarball(object):
 
 
 class TaskConfig:
-    def __init__(self, taskName, cfgfile):
+    def __init__(self, taskName, cfgfile, initialdir=None):
         # print('Task: {}'.format(taskName))
         common_config = cfgfile['Common']
         task_config = cfgfile[taskName]
@@ -120,13 +127,16 @@ class TaskConfig:
             if key not in task_config.keys():
                 setattr(self, key, value)
 
-        self.task_base_dir = '{}/{}/'.format(
+        # With --initialdir the whole task tree (conf, logs, sandbox, ...) lives under that
+        # directory, so every path derived from task_dir/task_base_dir is absolute there
+        rel_base_dir = '{}/{}/'.format(
             common_config['name'],
             common_config['version'])
-        self.task_dir = '{}/{}/{}'.format(
-            common_config['name'],
-            common_config['version'],
-            taskName)
+        root = initialdir if initialdir else ''
+        self.task_base_dir = os.path.join(
+            root, common_config['name'], common_config['version']) + '/'
+        self.task_dir = os.path.join(
+            root, common_config['name'], common_config['version'], taskName)
         if 'output_dir_base' in common_config.keys():
             self.output_dir_base = common_config['output_dir_base']
             self.output_dir = '{}/{}/{}/{}'.format(
@@ -138,7 +148,7 @@ class TaskConfig:
             self.output_dir_base = None
             self.output_dir = '{}/{}/{}/{}'.format(
                 'userOutput',
-                self.task_base_dir,
+                rel_base_dir,
                 common_config['mode'],
                 self.version)
         self.ncpu = common_config['ncpu']
@@ -439,7 +449,7 @@ def createJobConfig(mode, params, step_name=None, in_file=None, out_file=None):
         job_config_file.close()
 
 
-def createCondorConfig(mode, params):
+def createCondorConfig(mode, params, initialdir=None):
     condor_template_name = 'templates/condorSubmit_{}.sub'.format(mode)
     default_template_name = 'templates/condorSubmit_{}.sub'.format('DEFAULT')
     if not os.path.isfile(condor_template_name):
@@ -457,6 +467,16 @@ def createCondorConfig(mode, params):
             print("Warning: Could not set MY.WantOS in condor template.")
     for key in templs_keys:
         condor_template = condor_template.replace(key, str(params[key]))
+
+    if initialdir:
+        # submit commands must come before 'queue', so put the line at the top
+        # (or overwrite an initialdir the template already has)
+        initialdir_line = 'initialdir = {}'.format(initialdir)
+        if re.search(r'^\s*initialdir\s*=', condor_template, re.I | re.M):
+            condor_template = re.sub(r'^\s*initialdir\s*=.*$', lambda m: initialdir_line,
+                                     condor_template, flags=re.I | re.M)
+        else:
+            condor_template = initialdir_line + '\n' + condor_template
 
     check_substitution_complete(condor_template)
     condor_file = open(os.path.join(params['TEMPL_TASKCONFDIR'], 'condorSubmit.sub'), 'w')
@@ -509,7 +529,7 @@ def createCrabConfig(mode, params):
     crab_file.close()
 
 
-def createTaskSetup(task_config, config_file):
+def createTaskSetup(task_config, config_file, initialdir=None):
     mode = config_file['Common']['mode']
     pwd = os.environ["PWD"]
     if not os.path.exists(task_config.task_dir):
@@ -554,7 +574,7 @@ def createTaskSetup(task_config, config_file):
             previous_step_out_file = f'file:{out_file}'
 
         createJobSandbox(params)
-        createCondorConfig(mode, params)
+        createCondorConfig(mode, params, initialdir)
         createJobExecutable(mode, params)
     else:
         # FIXME: should throw an error if more than 1 step used with crab
@@ -563,17 +583,95 @@ def createTaskSetup(task_config, config_file):
     return
 
 
-def submitTask(sub_name, task_config):
-    submit_cmd = 'condor_submit {}/conf/condorSubmit.sub -batch-name {}_{}_{}'.format(task_config.task_dir, sub_name, task_config.version, task_config.task_name)
+def safeJobName(task_name):
+    """Plain identifier, used for GitLab job names"""
+    return re.sub(r'[^A-Za-z0-9_]', '_', task_name)
+
+
+def getCondorLogDir(task_config):
+    """Directory holding the condor user logs (condor.<cluster>.log) of a task."""
+    return os.path.abspath(os.path.join(task_config.task_dir, 'logs'))
+
+
+def condorCommand(args, ssh_host=None, ssh_key=None):
+    """
+    Run a command (list of arguments) and return (return code, output).
+    With ssh_host the command runs on that host (e.g. lxplus.cern.ch) after
+    'module load lxbatch/eossubmit': the ssh login uses the Kerberos ticket of this shell
+    (GSSAPI, with the ticket delegated so that the remote session has credentials of its own).
+    """
+    if not ssh_host:
+        cmd = args
+    else:
+        remote = ('if [[ $(type -t module) != function ]]; then . /etc/profile.d/modules.sh; fi; '
+                  'module load lxbatch/eossubmit; '
+                  + ' '.join(shlex.quote(a) for a in args))
+        cmd = ['ssh',
+               '-o', 'BatchMode=yes',
+               '-o', 'ConnectTimeout=30',
+               '-o', 'StrictHostKeyChecking=accept-new',
+               '-o', 'GSSAPIAuthentication=yes',
+               '-o', 'GSSAPIDelegateCredentials=yes']
+        if ssh_key:
+            cmd += ['-i', ssh_key, '-o', 'IdentitiesOnly=yes']
+        cmd += [ssh_host, 'bash -c ' + shlex.quote(remote)]
+    proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                          universal_newlines=True)
+    return proc.returncode, proc.stdout
+
+
+def requireEos(path, ssh_host):
+    """With ssh the remote host must see the files: they have to be on EOS"""
+    if ssh_host and not os.path.abspath(path).startswith('/eos/'):
+        print('ERROR: with --ssh-host the task tree must be on EOS (use --initialdir /eos/...), '
+              'but {} is not'.format(os.path.abspath(path)))
+        sys.exit(13)
+
+
+def submitTask(sub_name, task_config, schedd=None, ssh_host=None, ssh_key=None):
+    """Returns True if the submission succeeded"""
     if task_config.crab:
-        submit_cmd = 'crab submit {}/conf/crab.py'.format(task_config.task_dir)
-    try:
-        output = subprocess.check_output(submit_cmd, shell=True).splitlines()
-    except subprocess.CalledProcessError as e:
-        print('Command: {} FAILED!'.format(submit_cmd))
-        output = e.output.splitlines()
-    for line in output:
-        print(line.decode('UTF-8'))
+        # crab is always run locally
+        rc, output = condorCommand(['crab', 'submit', '{}/conf/crab.py'.format(task_config.task_dir)])
+    else:
+        sub_file = os.path.abspath(os.path.join(task_config.task_dir, 'conf', 'condorSubmit.sub'))
+        requireEos(sub_file, ssh_host)
+        args = ['condor_submit']
+        if schedd:
+            args += ['-name', schedd]
+        args += [sub_file, '-batch-name',
+                 '{}_{}_{}'.format(sub_name, task_config.version, task_config.task_name)]
+        rc, output = condorCommand(args, ssh_host, ssh_key)
+    print(output)
+    if rc != 0:
+        print('Submission of {} FAILED (exit code {})!'.format(task_config.task_name, rc))
+        return False
+    return True
+
+
+def writeMonitorPipeline(task_configs, filename):
+    """Write a GitLab child-pipeline file with one monitor job per submitted task."""
+    jobs = {'default': {'before_script': [MONITOR_BEFORE_SCRIPT]}}
+    n_jobs = 0
+    for task in task_configs:
+        if task.crab:
+            continue  # monitored differently (crab status)
+        jobs['monitor-{}'.format(safeJobName(task.task_name))] = {
+            'tags': ['k8s-cvmfs'],
+            'image': 'gitlab-registry.cern.ch/cms-cloud/cmssw-docker/al8-cms:latest',
+            'timeout': '1h',
+            'variables': {
+                'TASK': task.task_name,
+                'CONDOR_LOG_DIR': getCondorLogDir(task),
+            },
+            'script': ['bash scripts/monitor_condor.sh "$CONDOR_LOG_DIR"'],
+        }
+        n_jobs += 1
+    if n_jobs == 0:  # a child pipeline with no jobs is an error
+        jobs['nothing-to-monitor'] = {'script': ['echo "no condor tasks submitted"']}
+    with open(filename, 'w') as f:
+        yaml.safe_dump(jobs, f, default_flow_style=False, sort_keys=False)
+    print('   wrote {} with {} monitor job(s)'.format(filename, n_jobs))
 
 
 def getCondorCluster(task_config):
@@ -585,21 +683,24 @@ def getCondorCluster(task_config):
     return clusterId
 
 
-def printStatus(clusterId):
-    condor_cmd = 'condor_q {}'.format(clusterId)
-    try:
-        print(subprocess.check_output(condor_cmd, shell=True))
-    except subprocess.CalledProcessError as e:
-        print('Command: {} FAILED!'.format(condor_cmd))
-        print(e.output)
+def printStatus(clusterId, schedd=None, ssh_host=None, ssh_key=None):
+    args = ['condor_q']
+    if schedd:
+        args += ['-name', schedd]
+    args.append(str(clusterId))
+    rc, output = condorCommand(args, ssh_host, ssh_key)
+    print(output)
+    if rc != 0:
+        print('Command: {} FAILED!'.format(' '.join(args)))
 
-def printWait(task_conf, clusterId):
-    condor_cmd = 'condor_wait -wait 30 -status {}/logs/condor.{}.log'.format(task_conf.task_dir, clusterId)
-    try:
-        print(subprocess.check_output(condor_cmd, shell=True))
-    except subprocess.CalledProcessError as e:
-        print('Command: {} FAILED!'.format(condor_cmd))
-        print(e.output)
+
+def printWait(task_conf, clusterId, ssh_host=None, ssh_key=None):
+    args = ['condor_wait', '-wait', '30', '-status',
+            '{}/condor.{}.log'.format(getCondorLogDir(task_conf), clusterId)]
+    rc, output = condorCommand(args, ssh_host, ssh_key)
+    print(output)
+    if rc != 0:
+        print('Command: {} FAILED!'.format(' '.join(args)))
 
 
 def _parse_condor_timestamp(timestamp_text):
@@ -963,6 +1064,17 @@ def main():
     parser.add_option('-d', '--dir', dest='LOCALDIR', help='specify the top local directory for local jobs')
     parser.add_option('-t', '--task', dest='TASK', help='select specific tasks by name (comma-separated list). Run only these tasks instead of all', default=None)
     parser.add_option('-v', '--version', dest='VERSION', help='override campaign version (used by --stats to choose task directory)', default=None)
+    parser.add_option("--monitor-yaml", dest="MONITOR_YAML", default=None,
+                      help="write a GitLab child pipeline with one monitor job per task to this file")
+    parser.add_option("--schedd", dest="SCHEDD", default=None,
+                      help="submit to / query this schedd explicitly (condor_submit/condor_q -name), e.g. bigbird24.cern.ch")
+    parser.add_option("--ssh-host", dest="SSH_HOST", default=None,
+                      help="run condor_submit/condor_q/condor_wait on this host over ssh (e.g. lxplus.cern.ch) "
+                           "after 'module load lxbatch/eossubmit'; needs --initialdir on EOS")
+    parser.add_option("--ssh-key", dest="SSH_KEY", default=None,
+                      help="ssh identity file (default: Kerberos/GSSAPI login with the ticket of this shell)")
+    parser.add_option("--initialdir", dest="INITIALDIR", default=None,
+                      help="directory (e.g. on EOS) that holds the whole task tree and is written as 'initialdir =' in the condor sub files")
 
     global opt, args
     (opt, args) = parser.parse_args()
@@ -996,7 +1108,7 @@ def main():
     task_configs = []
     print(tasks)
     for task in tasks:
-        task_configs.append(TaskConfig(task, cfgfile))
+        task_configs.append(TaskConfig(task, cfgfile, opt.INITIALDIR))
 
     for task_conf in task_configs:
         print(task_conf)
@@ -1005,14 +1117,18 @@ def main():
         for task_conf in task_configs:
             print('-- Creating task {}'.format(task_conf.task_name))
             # 1 create local dir
-            createTaskSetup(task_conf, cfgfile)
+            createTaskSetup(task_conf, cfgfile, opt.INITIALDIR)
         readme_file = os.path.join(task_configs[0].task_base_dir, 'README.md')
         printDoc(task_configs, output_file=readme_file, to_stdout=False)
     elif opt.SUBMIT:
+        failed = []
         for task_conf in task_configs:
             print('-- Submitting task {}'.format(task_conf.task_name))
-            # 1 create local dir
-            submitTask(sub_name, task_conf)
+            if not submitTask(sub_name, task_conf, opt.SCHEDD, opt.SSH_HOST, opt.SSH_KEY):
+                failed.append(task_conf.task_name)
+        if failed:
+            print('ERROR: submission failed for: {}'.format(failed))
+            sys.exit(1)
     elif opt.RUN:
         if not opt.LOCALDIR:
             print("Error: LOCALDIR not specified. Please use the -d option to specify the top local directory for local jobs.")
@@ -1024,13 +1140,15 @@ def main():
         for task_conf in task_configs:
             print('-- Status of task {}'.format(task_conf.task_name))
             clusterId = getCondorCluster(task_conf)
-            printStatus(clusterId)
-            printWait(task_conf, clusterId)
+            printStatus(clusterId, opt.SCHEDD, opt.SSH_HOST, opt.SSH_KEY)
+            printWait(task_conf, clusterId, opt.SSH_HOST, opt.SSH_KEY)
             print('   out dir: {}'.format(task_conf.output_dir))
     elif opt.STATS:
         printTaskStats(task_configs)
     elif opt.DOC:
         printDoc(task_configs)
+    elif opt.MONITOR_YAML:
+        writeMonitorPipeline(task_configs, opt.MONITOR_YAML)
 
 if __name__ == "__main__":
     main()
