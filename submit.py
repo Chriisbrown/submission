@@ -277,7 +277,14 @@ def getJobParams(mode, task_conf):
             else:
                 print(('ERROR: no input specified for task: {}'.format(task_conf.task_name)))
                 sys.exit(1)
-        # print input_files
+        # Optionally restrict the number of input files (applies to every input type).
+        # Sorted first so the selection is reproducible between --create runs.
+        if not task_conf.crab and hasattr(task_conf, 'max_files') and int(task_conf.max_files) >= 0:
+            input_files = sorted(input_files)
+            if len(input_files) > int(task_conf.max_files):
+                print('  restricting input to the first {} of {} files (max_files)'.format(
+                    int(task_conf.max_files), len(input_files)))
+                input_files = input_files[:int(task_conf.max_files)]
 
         max_events = -1
         # NOTE: this is not considered when submitting tasks without crab...unless the splitting is event_ranges
