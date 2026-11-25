@@ -151,6 +151,10 @@ class TaskConfig:
                 rel_base_dir,
                 common_config['mode'],
                 self.version)
+        # absolute directory the jobs write their root files to (a relative output_dir is
+        # relative to the job's initialdir)
+        self.abs_output_dir = (self.output_dir if os.path.isabs(self.output_dir)
+                               else os.path.join(root or os.getcwd(), self.output_dir))
         self.ncpu = common_config['ncpu']
         if 'max_memory' in common_config.keys():
             self.max_memory = common_config['max_memory']
@@ -656,14 +660,18 @@ def submitTask(sub_name, task_config, schedd=None, ssh_host=None, ssh_key=None):
     return True
 
 
-def writeMonitorPipeline(task_configs, filename):
-    """Write a GitLab child-pipeline file with one monitor job per submitted task."""
+def writeMonitorPipeline(task_configs, filename, merge_dir=None, keep_parts=True, cleanup=True):
+    """Write a GitLab child-pipeline file with one monitor job per submitted task.
+
+    With merge_dir, each job continues after a successful monitor by hadd-ing the task's
+    output root files into <merge_dir>/<name>/<version>/<task>.root and (cleanup) removing
+    the task's conf/ and logs/ directories."""
     jobs = {'default': {'before_script': [MONITOR_BEFORE_SCRIPT]}}
     n_jobs = 0
     for task in task_configs:
         if task.crab:
             continue  # monitored differently (crab status)
-        jobs['monitor-{}'.format(safeJobName(task.task_name))] = {
+        job = {
             'tags': ['k8s-cvmfs'],
             'image': 'gitlab-registry.cern.ch/cms-cloud/cmssw-docker/al8-cms:latest',
             'timeout': '1h',
@@ -673,6 +681,19 @@ def writeMonitorPipeline(task_configs, filename):
             },
             'script': ['bash scripts/monitor_condor.sh "$CONDOR_LOG_DIR"'],
         }
+        if merge_dir:
+            stem = os.path.splitext(os.path.basename(task.output_file_name))[0]
+            job['variables'].update({
+                'TASK_DIR': os.path.abspath(task.task_dir),
+                'OUTPUT_DIR': task.abs_output_dir,
+                'OUTPUT_PATTERN': '{}*.root'.format(stem),
+                'MERGED_FILE': os.path.join(
+                    merge_dir, task.version, '{}.root'.format(task.task_name)),
+                'KEEP_PARTS': '1' if keep_parts else '0',
+                'CLEANUP': '1' if cleanup else '0',
+            })
+            job['script'].append('bash scripts/postprocess_condor.sh')
+        jobs['monitor-{}'.format(safeJobName(task.task_name))] = job
         n_jobs += 1
     if n_jobs == 0:  # a child pipeline with no jobs is an error
         jobs['nothing-to-monitor'] = {'script': ['echo "no condor tasks submitted"']}
@@ -1080,6 +1101,13 @@ def main():
                            "after 'module load lxbatch/eossubmit'; needs --initialdir on EOS")
     parser.add_option("--ssh-key", dest="SSH_KEY", default=None,
                       help="ssh identity file (default: Kerberos/GSSAPI login with the ticket of this shell)")
+    parser.add_option("--merge-dir", dest="MERGE_DIR", default=None,
+                      help="with --monitor-yaml: after the jobs finish, hadd each task's output into "
+                           "<merge-dir>/<version>/<task>.root and clean up its conf/ and logs/")
+    parser.add_option("--delete-parts", dest="DELETE_PARTS", action="store_true", default=False,
+                      help="with --merge-dir: also delete the per-job root files after a verified merge")
+    parser.add_option("--no-cleanup", dest="NO_CLEANUP", action="store_true", default=False,
+                      help="with --merge-dir: keep the task's conf/ and logs/ directories")
     parser.add_option("--initialdir", dest="INITIALDIR", default=None,
                       help="directory (e.g. on EOS) that holds the whole task tree and is written as 'initialdir =' in the condor sub files")
 
@@ -1155,7 +1183,8 @@ def main():
     elif opt.DOC:
         printDoc(task_configs)
     elif opt.MONITOR_YAML:
-        writeMonitorPipeline(task_configs, opt.MONITOR_YAML)
+        writeMonitorPipeline(task_configs, opt.MONITOR_YAML, opt.MERGE_DIR,
+                             keep_parts=not opt.DELETE_PARTS, cleanup=not opt.NO_CLEANUP)
 
 if __name__ == "__main__":
     main()
