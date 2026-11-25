@@ -674,7 +674,7 @@ def writeMonitorPipeline(task_configs, filename, merge_dir=None, keep_parts=True
         job = {
             'tags': ['k8s-cvmfs'],
             'image': 'gitlab-registry.cern.ch/cms-cloud/cmssw-docker/al8-cms:latest',
-            'timeout': '1h',
+            'timeout': '24h',
             'variables': {
                 'TASK': task.task_name,
                 'CONDOR_LOG_DIR': getCondorLogDir(task),
