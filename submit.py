@@ -679,7 +679,7 @@ def writeMonitorPipeline(task_configs, filename, merge_dir=None, keep_parts=True
         job = {
             'tags': ['k8s-cvmfs'],
             'image': monitor_image,
-            'timeout': '1h',
+            'timeout': '2d',
             'variables': {
                 'TASK': task.task_name,
                 'CONDOR_LOG_DIR': getCondorLogDir(task),
@@ -696,7 +696,7 @@ def writeMonitorPipeline(task_configs, filename, merge_dir=None, keep_parts=True
                 'needs': ['monitor-{}'.format(safeJobName(task.task_name))],
                 'when': 'always',  # also after a failed/timed-out monitor job
                 'tags': ['cern-nextgen-gpu'],
-                'image': 'gitlab-registry.cern.ch/cms-cloud/cmssw-docker/al9-cms:latest,
+                'image': 'gitlab-registry.cern.ch/cms-cloud/cmssw-docker/al9-cms:latest',
                 'timeout': '3h',
                 'variables': {
                     'TASK': task.task_name,
