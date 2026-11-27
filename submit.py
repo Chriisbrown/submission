@@ -660,21 +660,26 @@ def submitTask(sub_name, task_config, schedd=None, ssh_host=None, ssh_key=None):
     return True
 
 
-def writeMonitorPipeline(task_configs, filename, merge_dir=None, keep_parts=True, cleanup=True):
+def writeMonitorPipeline(task_configs, filename, merge_dir=None, keep_parts=True, cleanup=True,
+                         ):
     """Write a GitLab child-pipeline file with one monitor job per submitted task.
 
-    With merge_dir, each job continues after a successful monitor by hadd-ing the task's
-    output root files into <merge_dir>/<name>/<version>/<task>.root and (cleanup) removing
-    the task's conf/ and logs/ directories."""
+    With merge_dir, every task also gets a separate 'merge-<task>' job in a later stage. It runs
+    whether the monitor job succeeded or failed (when: always), on its own image/tags (merge_image,
+    merge_tags) since hadd is not available on the monitor image. It hadds the task's output into
+    <merge_dir>/<version>/<task>.root and (cleanup) removes the task's conf/ and logs/ directories."""
+    monitor_image = 'gitlab-registry.cern.ch/cms-cloud/cmssw-docker/al8-cms:latest'
     jobs = {'default': {'before_script': [MONITOR_BEFORE_SCRIPT]}}
+    if merge_dir:
+        jobs['stages'] = ['monitor', 'merge']
     n_jobs = 0
     for task in task_configs:
         if task.crab:
             continue  # monitored differently (crab status)
         job = {
             'tags': ['k8s-cvmfs'],
-            'image': 'gitlab-registry.cern.ch/cms-cloud/cmssw-docker/al8-cms:latest',
-            'timeout': '24h',
+            'image': monitor_image,
+            'timeout': '1h',
             'variables': {
                 'TASK': task.task_name,
                 'CONDOR_LOG_DIR': getCondorLogDir(task),
@@ -682,21 +687,34 @@ def writeMonitorPipeline(task_configs, filename, merge_dir=None, keep_parts=True
             'script': ['bash scripts/monitor_condor.sh "$CONDOR_LOG_DIR"'],
         }
         if merge_dir:
-            stem = os.path.splitext(os.path.basename(task.output_file_name))[0]
-            job['variables'].update({
-                'TASK_DIR': os.path.abspath(task.task_dir),
-                'OUTPUT_DIR': task.abs_output_dir,
-                'OUTPUT_PATTERN': '{}*.root'.format(stem),
-                'MERGED_FILE': os.path.join(
-                    merge_dir, task.version, '{}.root'.format(task.task_name)),
-                'KEEP_PARTS': '1' if keep_parts else '0',
-                'CLEANUP': '1' if cleanup else '0',
-            })
-            job['script'].append('bash scripts/postprocess_condor.sh')
+            job['stage'] = 'monitor'
         jobs['monitor-{}'.format(safeJobName(task.task_name))] = job
+        if merge_dir:
+            stem = os.path.splitext(os.path.basename(task.output_file_name))[0]
+            jobs['merge-{}'.format(safeJobName(task.task_name))] = {
+                'stage': 'merge',
+                'needs': ['monitor-{}'.format(safeJobName(task.task_name))],
+                'when': 'always',  # also after a failed/timed-out monitor job
+                'tags': ['cern-nextgen-gpu'],
+                'image': 'gitlab-registry.cern.ch/cms-cloud/cmssw-docker/al9-cms:latest,
+                'timeout': '3h',
+                'variables': {
+                    'TASK': task.task_name,
+                    'CONDOR_LOG_DIR': getCondorLogDir(task),
+                    'TASK_DIR': os.path.abspath(task.task_dir),
+                    'OUTPUT_DIR': task.abs_output_dir,
+                    'OUTPUT_PATTERN': '{}*.root'.format(stem),
+                    'MERGED_FILE': os.path.join(merge_dir, task.version, '{}.root'.format(task.task_name)),
+                    'KEEP_PARTS': '1' if keep_parts else '0',
+                    'CLEANUP': '1' if cleanup else '0',
+                },
+                'script': ['bash scripts/postprocess_condor.sh'],
+            }
         n_jobs += 1
     if n_jobs == 0:  # a child pipeline with no jobs is an error
         jobs['nothing-to-monitor'] = {'script': ['echo "no condor tasks submitted"']}
+        if merge_dir:
+            jobs['nothing-to-monitor']['stage'] = 'monitor'
     with open(filename, 'w') as f:
         yaml.safe_dump(jobs, f, default_flow_style=False, sort_keys=False)
     print('   wrote {} with {} monitor job(s)'.format(filename, n_jobs))
@@ -1184,7 +1202,8 @@ def main():
         printDoc(task_configs)
     elif opt.MONITOR_YAML:
         writeMonitorPipeline(task_configs, opt.MONITOR_YAML, opt.MERGE_DIR,
-                             keep_parts=not opt.DELETE_PARTS, cleanup=not opt.NO_CLEANUP)
+                             keep_parts=not opt.DELETE_PARTS, cleanup=not opt.NO_CLEANUP,
+                            )
 
 if __name__ == "__main__":
     main()
